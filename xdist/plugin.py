@@ -24,11 +24,12 @@ def pytest_addoption(parser):
                           "when crashed (set to zero to disable this feature)")
     group._addoption(
         '--dist', metavar="distmode",
-        action="store", choices=['load', 'each', 'no'],
+        action="store", choices=['load', 'each', 'class', 'no'],
         type="choice", dest="dist", default="no",
         help=("set mode for distributing tests to exec environments.\n\n"
               "each: send each test to each available environment.\n\n"
               "load: send each test to available environment.\n\n"
+              "class: same as 'load', but group tests by test class.\n\n"
               "(default) no: run tests inprocess, don't distribute."))
     group._addoption(
         '--tx', dest="tx", action="append", default=[],

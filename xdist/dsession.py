@@ -420,6 +420,88 @@ class LoadScheduling:
         return same_collection
 
 
+# Stolen from Pierre-Yves Rofes's rejected Issue-175 PoC
+# https://bitbucket.org/piwai/pytest-xdist/commits/all
+# This is too helpful to not use, at least in the planning stage of 
+# https://github.com/pytest-dev/pytest-xdist/issues/18
+class ClassLoadScheduling(LoadScheduling):
+    """Implement class-based load scheduling accross nodes.
+
+    This is basically the same as LoadScheduling, except that
+    we ensure that all the tests belonging to the same test class
+    are executed on the same node. This is useful e.g. when your
+    setUpClass()/tearDownClass() methods are time-consuming.
+
+
+    Attributes:
+
+    All attributes are the same than LoadScheduling.
+
+    :class_collection: The tests items, indexed by test class
+    """
+
+    def __init__(self, numnodes, log=None):
+        self.numnodes = numnodes
+        self.node2collection = {}
+        self.node2pending = {}
+        self.pending = []
+        self.collection = None
+        self.class_collection = {}
+        if log is None:
+            self.log = py.log.Producer("loadsched")
+        else:
+            self.log = log.loadsched
+
+    def init_distribute(self):
+        """Initiate distribution of the test collection
+
+        Initiate scheduling of the items across the nodes.  If this
+        gets called again later it behaves the same as calling
+        ``.check_schedule()`` on all nodes so that newly added nodes
+        will start to be used.
+
+        This is called by the ``DSession.slave_collectionfinish`` hook
+        if ``.collection_is_completed`` is True.
+
+        XXX Perhaps this method should have been called ".schedule()".
+        """
+        assert self.collection_is_completed
+
+        # Initial distribution already happend, reschedule on all nodes
+        if self.collection is not None:
+            for node in self.nodes:
+                self.check_schedule(node)
+            return
+
+        # XXX allow nodes to have different collections
+        if not self._check_nodes_have_same_collection():
+            self.log('**Different tests collected, aborting run**')
+            return
+
+        # Collections are identical, create the index of pending items.
+        self.collection = list(self.node2collection.values())[0]
+        for (i, test) in enumerate(self.collection):
+            parts = test.split('::')
+            test_class = parts[0] if len(parts) == 2 else parts[1]
+            if test_class in self.class_collection:
+                self.class_collection[test_class].append(i)
+            else:
+                self.class_collection[test_class] = [i]
+        self.pending[:] = self.class_collection.keys()
+        if not self.collection:
+            return
+
+        for node in self.nodes:
+            self._send_tests(node, 1)
+
+    def _send_tests(self, node, num):
+        next = self.pending[0]
+        if next:
+            del self.pending[0]
+            self.node2pending[node].extend(self.class_collection[next])
+            node.send_runtest_some(self.class_collection[next])
+
+
 def report_collection_diff(from_collection, to_collection, from_id, to_id):
     """Report the collected test difference between two nodes.
 
@@ -529,6 +611,8 @@ class DSession:
                                         config=self.config)
         elif dist == "each":
             self.sched = EachScheduling(numnodes, log=self.log)
+        elif dist == "class":
+            self.sched = ClassLoadScheduling(numnodes, log=self.log)
         else:
             assert 0, dist
         self.shouldstop = False
