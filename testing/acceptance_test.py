@@ -411,7 +411,9 @@ def test_session_testscollected(testdir):
 
 def test_funcarg_teardown_failure(testdir):
     p = testdir.makepyfile("""
-        def pytest_funcarg__myarg(request):
+        import pytest
+        @pytest.fixture
+        def myarg(request):
             def teardown(val):
                 raise ValueError(val)
             return request.cached_setup(setup=lambda: 42, teardown=teardown,
@@ -642,3 +644,46 @@ def test_worker_id_fixture(testdir, n):
         assert worker_ids == set(['master'])
     else:
         assert worker_ids == set(['gw0', 'gw1'])
+
+
+def test_color_yes_collection_on_non_atty(testdir, request):
+    """skip collect progress report when working on non-terminals.
+
+    Similar to pytest-dev/pytest#1397
+    """
+    tr = request.config.pluginmanager.getplugin("terminalreporter")
+    if not hasattr(tr, 'isatty'):
+        pytest.skip('only valid for newer pytest versions')
+    testdir.makepyfile("""
+        import pytest
+        @pytest.mark.parametrize('i', range(10))
+        def test_this(i):
+            assert 1
+    """)
+    args = ['--color=yes', '-n2']
+    result = testdir.runpytest(*args)
+    assert 'test session starts' in result.stdout.str()
+    assert '\x1b[1m' in result.stdout.str()
+    assert 'gw0 [10] / gw1 [10]' in result.stdout.str()
+    assert 'gw0 C / gw1 C' not in result.stdout.str()
+
+
+def test_internal_error_with_maxfail(testdir):
+    """
+    Internal error when using --maxfail option (#62, #65).
+    """
+    testdir.makepyfile("""
+        import pytest
+
+        @pytest.fixture(params=['1', '2'])
+        def crasher():
+            raise RuntimeError
+
+        def test_aaa0(crasher):
+            pass
+        def test_aaa1(crasher):
+            pass
+    """)
+    result = testdir.runpytest_subprocess('--maxfail=1', '-n1')
+    result.stdout.fnmatch_lines(['* 1 error in *'])
+    assert 'INTERNALERROR' not in result.stderr.str()
